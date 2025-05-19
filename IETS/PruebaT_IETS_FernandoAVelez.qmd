@@ -1,0 +1,146 @@
+---
+title: "PRUEBA TECNICA - IETS"
+author: "Fernando Alonso Velez R."
+format: docx
+---
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+library(tidyverse)
+library(RSQLite)
+library(flextable)
+```
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+con = dbConnect(SQLite(), "D:/CONSULTORIA/IETS/db_reps.db")
+#Municipios = dbReadTable(con, "Municipios")
+#Prestadores = dbReadTable(con, "Prestadores")
+
+Q01 = dbGetQuery(con, 
+                  "SELECT m.Region, 
+                          p.clpr_nombre, 
+                          count(p.codigo_habilitacion) as Conteo 
+                  FROM Prestadores as p
+                  LEFT JOIN Municipios as m
+                  ON p.MPIO=m.MPIO
+                  GROUP BY m.Region, p.clpr_nombre"
+                  )
+
+Q02 = dbGetQuery(con, 
+                  "SELECT m.DPTO,m.MUNICIPIO, 
+                          m.PDET,m.PopTot,
+                          p.clpr_nombre, 
+                          count(p.codigo_habilitacion) as Conteo 
+                  FROM Prestadores as p
+                  LEFT JOIN Municipios as m
+                  ON p.MPIO=m.MPIO
+                  GROUP BY m.MUNICIPIO, p.clpr_nombre"
+                  )
+dbDisconnect(con)
+```
+
+
+## ESTRUCTURA BASE REPS (Registro Especial de Prestadores de Salud)
+
+
+A partir del dataset disponible en la [url indicada](https://prestadores.minsalud.gov.co/habilitacion/) y el archivo de Municipios se estructuró una base de datos en SQLite, la cual contiene dos tablas: `Prestadores` y `Municipios`. Tras la preparación de las dos tablas, se desarrolla a contunuación algunos elementos principalmente descriptivos que evidencian aspectos importantes en relación a los prestadores de salud en el pais.
+
+
+## 1. ¿Cuántos prestadores hay por región geográfica y por tipo de prestador?
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+
+# Cambio de texto para NA en Departamento
+Q01$Region[is.na(Q01$Region)] ='Sin registro'
+
+# se convierte a factor las variables categoricas
+Q011=Q01 %>%rename(Tipo_P = clpr_nombre,
+                  Cant = Conteo) %>% 
+  mutate(Region = as.factor(Region),
+         Tipo_P = as.factor(Tipo_P))
+
+# se recodifica la variable Tipo_P
+Q011=Q011%>%mutate(Tipo_P=fct_recode(Tipo_P,'IPS'="Instituciones Prestadoras de Servicios de Salud - IPS",'Otro_Obj._Social'="Objeto Social Diferente a la Prestación de Servicios de Salud", 'Prof.Indep.'="Profesional Independiente",'Transp._Pacientes'="Transporte Especial de Pacientes"))
+
+# Se reestructura el dataframe para disponer por columnas el tipo de prestador
+
+Q012=Q011%>%pivot_wider(names_from = Tipo_P, values_from = Cant) %>% 
+  select(Region, IPS, Otro_Obj._Social, Prof.Indep., Transp._Pacientes)
+
+# Apliciacion de formato
+Q013=flextable(Q012) %>% 
+  set_header_labels(Departamento = "Región",
+                    IPS = "IPS",
+                    `Otro Obj. Social` = "Otro Objeto Social",
+                    `Prof.Indep.` = "Profesional Independiente",
+                    `Transp. Pacientes` = "Transporte Pacientes",
+                    Total = "Total") %>% 
+  set_caption("Tabla 1. Prestadores por departamento y tipo de prestador") %>% 
+  align(j = c(2:4), align = "center") %>%
+  autofit()
+print(Q013)
+```
+
+Respecto a las IPS y los profesionales de la salud independientes, se observa que la región con mayor número de prestadores es la región centro oriente, seguida por la región eje cafetero en caso de los profesionales. Así mismo, se observa un bajo numero de IPS para la región del llano en comparación con las otras regiones.
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+G1=ggplot(Q011%>%filter(Tipo_P=='IPS'|Tipo_P=='Prof.Indep.'),
+          aes(x=Region, y=Cant, fill=Tipo_P)) +
+  geom_bar(stat="identity", position = "dodge") +
+  #geom_text(aes(label=Cant),, position = position_dodge(),vjust=-0.5)+
+  theme_light()+
+  theme(axis.text.x = element_text(angle = 90))+
+  labs(title = "Prestadores por región y tipo de prestador",
+       x = "Región",
+       y = "Número de prestadores")+
+  theme(legend.position = "top",legend.title = element_blank())
+
+G1
+```
+## 2. ¿Cantidad de IPS por cada 1000 habitantes? 
+
+Una cifra que puede ser de interés es la cantidad de IPS por cada 1000 habitantes. Para esto, se toma como base la población total de cada municipio y se calcula el número de IPS por cada 1000 habitantes. A continuación se presenta la tabla con los resultados.
+
+```{r}
+#| message: false
+#| warning: false
+#| include: false
+
+Q021=Q02 %>% filter(clpr_nombre=='Instituciones Prestadoras de Servicios de Salud - IPS') %>%
+  rename(Municipio=MUNICIPIO,
+         Poblacion = PopTot,
+         Cant = Conteo) %>% 
+  mutate(Poblacion=as.numeric(Poblacion),
+         Cant=as.numeric(Cant)) %>% 
+  group_by(DPTO,Municipio) %>% 
+  summarise(Cant=sum(Cant),Poblacion=sum(Poblacion)) %>% 
+  ungroup() %>% 
+  mutate(IPS_1000=round((Cant/Poblacion)*1000,2))
+
+# Filtrar el top 5 de acuerdo a la cantidad de IPS por cada 1000 habitantes
+Q021=Q021 %>% arrange(desc(IPS_1000))%>%slice(1:10) 
+
+Q022=flextable(Q021) %>% 
+  set_header_labels(DPTO = "Departamento",
+                    Municipio = "Municipio",
+                    Poblacion = "Población Total",
+                    Cant = "Cantidad de IPS",
+                    IPS_1000 = "IPS por cada 1000 habitantes") %>% 
+  set_caption("Tabla 2. Top 10 de municipios con mayor cantidad de IPS por cada 1000 habitantes") %>% 
+  align(j = c(2:5), align = "center") %>%
+  autofit()
+Q022
+
+```
+
+El caso de Armenia(Antioquia) es particularmente interesante en virtud del alto número de IPS por cada 1000 habitantes, lo que puede ser un indicativo de la alta concentración de prestadores en esta región. En contraste, el municipio de La Macarena (Meta) no hay IPS registradas, lo que puede ser un indicativo de la falta de acceso a servicios de salud en esta región.
